@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Steve vs Зомби-Строители</title>
+<style>
+body, html {
+  margin: 0; padding: 0; overflow: hidden;
+  background: #1a0a2e;
+  font-family: 'Courier New', monospace;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+canvas { display: block; width: 100vw; height: 100vh; }
+#ui {
+  position: absolute; top: 8px; left: 8px;
+  color: #fff; text-shadow: 2px 2px 4px #000;
+  font-size: 16px; pointer-events: none; line-height: 1.4;
+}
+#overlay {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,0.75);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  color: #fff; text-align: center; font-size: 18px;
+  padding: 20px; box-sizing: border-box;
+}
+button {
+  margin-top: 18px; padding: 14px 28px;
+  font-size: 18px; background: #4CAF50; color: #fff;
+  border: none; border-radius: 8px; cursor: pointer;
+}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="ui">
+  <div>Счёт: <span id="score">0</span></div>
+  <div>Уровень: <span id="level">1</span></div>
+  <div>КД: <span id="cd">Готов</span></div>
+</div>
+<div id="overlay">
+  <h2>Steve vs Зомби-Строители</h2>
+  <p>Ты сверху. Зомби снизу прыгают и ставят блоки под себя.<br>
+  Сначала убей зомби — тогда стройка остановится.<br>
+  Потом разбирай блоки. На пустом месте появится новый зомби.</p>
+  <p>Прицел: тяни пальцем. КД 1.5с → 1с.</p>
+  <button id="startBtn">Начать</button>
+</div>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const uiScore = document.getElementById('score');
+const uiLevel = document.getElementById('level');
+const uiCd = document.getElementById('cd');
+const overlay = document.getElementById('overlay');
+
+let width, height;
+function resize() {
+  width = window.innerWidth;
+  height = window.innerHeight;
+  canvas.width = width;
+  canvas.height = height;
+}
+window.addEventListener('resize', resize);
+resize();
+
+let aimX = width / 2;
+let lastShot = 0;
+let cooldown = 1500;
+let score = 0;
+let level = 1;
+let gameOver = false;
+let gameStarted = false;
+let columns = [];
+const numColumns = 5;
+let blockSize = 48;
+const platformHeight = 100;
+let arrows = [];
+let particles = [];
+let lastTime = 0;
+
+function initColumns() {
+  columns = [];
+  blockSize = Math.min(64, Math.floor(width / (numColumns + 1)));
+  for (let i = 0; i < numColumns; i++) {
+    columns.push({
+      height: 0,
+      x: (i + 0.5) * (width / numColumns),
+      hasZombie: true,
+      zombieAlive: true,
+      jumpPhase: Math.random() * Math.PI * 2,
+      spawnTimer: 0
+    });
+  }
+}
+
+function resetGame() {
+  score = 0; level = 1; cooldown = 1500;
+  gameOver = false; arrows = []; particles = [];
+  initColumns();
+  lastShot = 0; aimX = width / 2;
+  uiScore.textContent = score;
+  uiLevel.textContent = level;
+  overlay.style.display = 'none';
+  gameStarted = true;
+}
+
+document.getElementById('startBtn').onclick = resetGame;
+document.getElementById('startBtn').ontouchend = (e) => { e.preventDefault(); resetGame(); };
+
+function tryShoot() {
+  const now = Date.now();
+  if (now - lastShot >= cooldown && !gameOver && gameStarted) {
+    arrows.push({ x: aimX, y: platformHeight - 5, speed: 14 });
+    lastShot = now;
+  }
+}
+
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (!gameStarted) return;
+  const t = e.touches[0];
+  aimX = Math.max(blockSize * 0.4, Math.min(width - blockSize * 0.4, t.clientX));
+  tryShoot();
+}, { passive: false });
+
+canvas.addEventListener('touchmove', (e) => {
+  e.preventDefault();
+  if (!gameStarted || gameOver) return;
+  const t = e.touches[0];
+  aimX = Math.max(blockSize * 0.4, Math.min(width - blockSize * 0.4, t.clientX));
+}, { passive: false });
+
+canvas.addEventListener('mousedown', (e) => {
+  if (!gameStarted) return;
+  aimX = e.clientX;
+  tryShoot();
+});
+canvas.addEventListener('mousemove', (e) => {
+  if (e.buttons === 1 && gameStarted && !gameOver) aimX = e.clientX;
+});
+
+document.addEventListener('keydown', (e) => {
+  if (!gameStarted) return;
+  if (e.key === 'ArrowLeft') aimX = Math.max(blockSize * 0.4, aimX - 25);
+  if (e.key === 'ArrowRight') aimX = Math.min(width - blockSize * 0.4, aimX + 25);
+  if (e.key === ' ' || e.key === 'Enter') tryShoot();
+});
+
+function spawnParticles(x, y, color, count = 12) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 6,
+      vy: (Math.random() - 0.8) * 5,
+      life: 1,
+      color
+    });
+  }
+}
+
+function update(delta) {
+  if (!gameStarted || gameOver) return;
+  const dt = delta / 16;
+
+  // Zombie logic
+  for (let col of columns) {
+    if (col.zombieAlive && col.hasZombie) {
+      col.jumpPhase += 0.12 * dt;
+      // Place block every ~1.2-1.8s while alive
+      if (Math.sin(col.jumpPhase) > 0.95 && Math.random() < 0.15 * dt) {
+        const maxH = Math.floor((height - platformHeight - 40) / blockSize);
+        if (col.height < maxH) {
+          col.height++;
+          spawnParticles(col.x, height - col.height * blockSize, '#8B4513', 6);
+        }
+      }
+    } else if (!col.zombieAlive && col.height === 0) {
+      col.spawnTimer += delta;
+      if (col.spawnTimer > 1200) {
+        col.hasZombie = true;
+        col.zombieAlive = true;
+        col.jumpPhase = 0;
+        col.spawnTimer = 0;
+      }
+    }
+  }
+
+  // Game over check
+  for (let col of columns) {
+    if (col.height * blockSize > height - platformHeight - 15) {
+      gameOver = true;
+      overlay.innerHTML = `<h2>Игра окончена</h2><p>Счёт: ${score}<br>Уровень: ${level}</p><button id="restartBtn">Ещё раз</button>`;
+      const btn = document.getElementById('restartBtn');
+      btn.onclick = resetGame;
+      btn.ontouchend = (e) => { e.preventDefault(); resetGame(); };
+      overlay.style.display = 'flex';
+      return;
+    }
+  }
+
+  // Arrows
+  for (let i = arrows.length - 1; i >= 0; i--) {
+    const a = arrows[i];
+    a.y += a.speed * dt;
+    if (a.y > height) { arrows.splice(i, 1); continue; }
+
+    for (let col of columns) {
+      if (Math.abs(a.x - col.x) < blockSize * 0.55) {
+        const topBlockY = height - col.height * blockSize;
+        const zombieY = topBlockY - blockSize * 0.7;
+
+        // Hit zombie first if alive
+        if (col.zombieAlive && a.y >= zombieY - 10 && a.y <= zombieY + blockSize * 0.5) {
+          col.zombieAlive = false;
+          col.hasZombie = false;
+          score += 30;
+          spawnParticles(col.x, zombieY, '#55FF55', 18);
+          uiScore.textContent = score;
+          arrows.splice(i, 1);
+          checkLevel();
+          break;
+        }
+        // Hit block
+        else if (col.height > 0 && a.y >= topBlockY - 8 && a.y <= topBlockY + blockSize * 0.6) {
+          col.height--;
+          score += 10;
+          spawnParticles(col.x, topBlockY, '#A0522D', 14);
+          uiScore.textContent = score;
+          arrows.splice(i, 1);
+          checkLevel();
+          break;
+        }
+      }
+    }
+  }
+
+  // Particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 0.15 * dt;
+    p.life -= 0.025 * dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  // CD UI
+  const rem = Math.max(0, cooldown - (Date.now() - lastShot));
+  uiCd.textContent = rem > 0 ? (rem / 1000).toFixed(1) + 'с' : 'Готов!';
+}
+
+function checkLevel() {
+  const newLevel = Math.floor(score / 120) + 1;
+  if (newLevel > level) {
+    level = newLevel;
+    uiLevel.textContent = level;
+    cooldown = level >= 3 ? 1000 : 1500;
+  }
+}
+
+function drawSteve(x, y) {
+  ctx.save();
+  ctx.translate(x, y);
+  // Head
+  ctx.fillStyle = '#C68642';
+  ctx.fillRect(-14, -48, 28, 22);
+  ctx.fillStyle = '#5C3317';
+  ctx.fillRect(-14, -48, 28, 7);
+  // Eyes
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(-9, -38, 7, 7);
+  ctx.fillRect(2, -38, 7, 7);
+  ctx.fillStyle = '#0044ff';
+  ctx.fillRect(-7, -36, 3, 3);
+  ctx.fillRect(4, -36, 3, 3);
+  // Body
+  ctx.fillStyle = '#00CED1';
+  ctx.fillRect(-12, -26, 24, 20);
+  // Arms
+  ctx.fillStyle = '#C68642';
+  ctx.fillRect(-18, -24, 6, 16);
+  ctx.fillRect(12, -24, 6, 16);
+  // Bow
+  ctx.strokeStyle = '#8B4513';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(20, -14, 14, -Math.PI * 0.7, Math.PI * 0.7);
+  ctx.stroke();
+  ctx.strokeStyle = '#ddd';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(20, -28);
+  ctx.lineTo(20, 0);
+  ctx.stroke();
+  // Legs
+  ctx.fillStyle = '#0000AA';
+  ctx.fillRect(-12, -6, 9, 16);
+  ctx.fillRect(3, -6, 9, 16);
+  ctx.restore();
+}
+
+function drawZombie(x, y, phase) {
+  const bounce = Math.sin(phase) * 6;
+  ctx.save();
+  ctx.translate(x, y + bounce);
+  // Head
+  ctx.fillStyle = '#4a7c3f';
+  ctx.fillRect(-10, -22, 20, 16);
+  // Eyes
+  ctx.fillStyle = '#aa44ff';
+  ctx.fillRect(-6, -16, 4, 4);
+  ctx.fillRect(2, -16, 4, 4);
+  // Body
+  ctx.fillStyle = '#3a6ea5';
+  ctx.fillRect(-8, -6, 16, 14);
+  // Arms
+  ctx.fillStyle = '#4a7c3f';
+  ctx.fillRect(-14, -4, 6, 10);
+  ctx.fillRect(8, -4, 6, 10);
+  // Legs
+  ctx.fillStyle = '#2c2c6e';
+  ctx.fillRect(-8, 8, 6, 10);
+  ctx.fillRect(2, 8, 6, 10);
+  ctx.restore();
+}
+
+function draw() {
+  // Sunset gradient background
+  const g = ctx.createLinearGradient(0, 0, 0, height);
+  g.addColorStop(0, '#1a0a3e');
+  g.addColorStop(0.35, '#6b2d5b');
+  g.addColorStop(0.7, '#e85d04');
+  g.addColorStop(1, '#ffba08');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, width, height);
+
+  // Soft clouds (simple)
+  ctx.fillStyle = 'rgba(255,180,100,0.25)';
+  for (let i = 0; i < 6; i++) {
+    const cx = (i * 180 + Date.now() * 0.01) % (width + 100) - 50;
+    const cy = 80 + (i % 3) * 40;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 40, 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Platform
+  ctx.fillStyle = '#4a4a4a';
+  ctx.fillRect(0, 0, width, platformHeight);
+  ctx.fillStyle = '#6e6e6e';
+  ctx.fillRect(0, platformHeight - 12, width, 12);
+  // Slit visual
+  ctx.fillStyle = '#222';
+  ctx.fillRect(width / 2 - 40, platformHeight - 30, 80, 18);
+
+  // Steve in center
+  drawSteve(width / 2, platformHeight - 8);
+
+  // Aim (cool dashed)
+  ctx.setLineDash([10, 6]);
+  ctx.strokeStyle = 'rgba(255, 230, 80, 0.85)';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(aimX, platformHeight + 4);
+  ctx.lineTo(aimX, height - 10);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Horizontal dashes + marker
+  ctx.fillStyle = '#ffe066';
+  for (let d = -70; d <= 70; d += 12) {
+    if (Math.abs(d) > 4) ctx.fillRect(aimX + d, platformHeight + 8, 7, 3);
+  }
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(aimX - 4, platformHeight + 4, 8, 10);
+
+  // Blocks + zombies
+  for (let col of columns) {
+    for (let h = 0; h < col.height; h++) {
+      const bx = col.x - blockSize / 2;
+      const by = height - (h + 1) * blockSize;
+      ctx.fillStyle = '#8B5A2B';
+      ctx.fillRect(bx, by, blockSize - 3, blockSize - 3);
+      ctx.strokeStyle = '#5c3a1e';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(bx, by, blockSize - 3, blockSize - 3);
+      // texture
+      ctx.fillStyle = '#6b4423';
+      ctx.fillRect(bx + 5, by + 5, 7, 7);
+      ctx.fillRect(bx + blockSize * 0.45, by + 10, 5, 5);
+    }
+    if (col.zombieAlive && col.hasZombie) {
+      const zy = height - col.height * blockSize - blockSize * 0.55;
+      drawZombie(col.x, zy, col.jumpPhase);
+    }
+  }
+
+  // Arrows
+  for (let a of arrows) {
+    ctx.fillStyle = '#ffd700';
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(a.x - 7, a.y - 16);
+    ctx.lineTo(a.x + 7, a.y - 16);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#8B4513';
+    ctx.fillRect(a.x - 2, a.y - 22, 4, 8);
+  }
+
+  // Particles
+  for (let p of particles) {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function loop(t) {
+  const delta = Math.min(t - lastTime, 40);
+  lastTime = t;
+  update(delta);
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+initColumns();
+</script>
+</body>
+</html>
